@@ -28,13 +28,13 @@ you just need a window into it.
 
 The NPC guard has five internal states:
 
-| State       | Behavior                                      |
-|-------------|-----------------------------------------------|
-| **Patrol**  | Follows a pre-scripted route of waypoints     |
+| State | Behavior |
+|---|---|
+| **Patrol** | Follows a pre-scripted route of waypoints |
 | **Alerted** | Heard a sound — moving toward the source tile |
-| **Chasing** | Spotted the player — actively pursuing.       |
-| **Lost**    | Reached target, player not found — searching  |
-| **Return**  | Gave up — heading back to patrol route        |
+| **Chasing** | Spotted the player — actively pursuing |
+| **Lost** | Reached target, player not found — searching |
+| **Return** | Gave up — heading back to patrol route |
 
 These states are wired to real perception systems:
 
@@ -83,12 +83,12 @@ swap it out, the logic still runs.
 
 ## Project Status
 
-| Phase | Description                         | Status         |
-|-------|-------------------------------------|----------------|
-| 1     | Core backend systems                | 🔲 Not started |
-| 2     | WebSocket server + minimal frontend | 🔲 Not started |
-| 3     | Debug panel                         | 🔲 Not started |
-| 4     | Polish & presentation               | 🔲 Not started |
+| Phase | Description | Status |
+|---|---|---|
+| 1 | Core backend systems | 🔲 Not started |
+| 2 | WebSocket server + minimal frontend | 🔲 Not started |
+| 3 | Debug panel | 🔲 Not started |
+| 4 | Polish & presentation | 🔲 Not started |
 
 See [ROADMAP.md](./ROADMAP.md) for full phase details.
 
