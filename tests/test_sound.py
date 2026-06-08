@@ -1,136 +1,228 @@
 """
-sound.py — Sound propagation system for Last Known Location.
-
-Sound radiates outward from a source tile in a rounded-square pattern.
-Unlike line of sight, sound is omnidirectional and is not blocked by walls.
-
-The hearing radius forms a square of size (2r+1) with the 4 outer corners
-clipped, and the origin tile excluded (the "eye of the storm").
-
-Shape example (range=2, entity at E):
-     XXX
-    XXXXX
-    XXEXX
-    XXXXX
-     XXX
-
-Rules:
-    - A tile is within hearing range if |dr| <= r AND |dc| <= r
-    - EXCEPT the 4 corners where |dr| == r AND |dc| == r (clipped)
-    - EXCEPT the origin tile itself (dr == 0, dc == 0)
-    - Walls do NOT block sound propagation
-    - The sound target is always the tile coordinate where the sound
-      originated, not the entity that caused it
-
-Coordinate system:
-    (row, col) — row 0 is top of map, col 0 is left edge.
+test_sound.py — Unit tests for the sound propagation system.
 """
 
-from app.models.grid import Grid
+import pytest
+from app.models.grid import Grid, TileType
+from app.systems.sound import get_sound_radius_tiles, can_hear, check_sound_event
+
+G = TileType.GROUND
+W = TileType.WALL
+N = TileType.NOISY
 
 
-def get_sound_radius_tiles(
-    origin: tuple[int, int],
-    sound_range: int,
-) -> list[tuple[int, int]]:
-    """
-    Return all tiles within hearing range of the origin.
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    The pattern is a square with the 4 outer corners clipped and the
-    origin tile excluded.
-
-    Args:
-        origin:      (row, col) of the listening entity.
-        sound_range: Maximum tile distance the entity can hear.
-
-    Returns:
-        List of (row, col) tuples within hearing range (unfiltered for
-        grid bounds).
-    """
-    er, ec = origin
-    tiles = []
-
-    for dr in range(-sound_range, sound_range + 1):
-        for dc in range(-sound_range, sound_range + 1):
-            # Exclude origin — the "eye of the storm"
-            if dr == 0 and dc == 0:
-                continue
-            # Clip the 4 outer corners
-            if abs(dr) == sound_range and abs(dc) == sound_range:
-                continue
-            tiles.append((er + dr, ec + dc))
-
-    return tiles
+def open_grid(rows=12, cols=12):
+    return Grid(rows, cols)
 
 
-def can_hear(
-    grid: Grid,
-    listener: tuple[int, int],
-    sound_range: int,
-    source: tuple[int, int],
-) -> bool:
-    """
-    Return whether a sound at source can be heard by the listener.
+# ---------------------------------------------------------------------------
+# Sound radius shape tests
+# ---------------------------------------------------------------------------
 
-    Sound is not blocked by walls. The listener cannot hear sounds
-    originating from their own tile. The source must be within the
-    grid bounds.
+class TestSoundRadiusTiles:
+    def test_range1_shape(self):
+        """
+        Range=1 should produce a 3x3 square minus 4 corners minus origin = 4 tiles.
+        The 4 cardinal neighbors only.
 
-    Args:
-        grid:        The Grid (used for bounds checking).
-        listener:    (row, col) of the listening entity.
-        sound_range: Maximum tile distance the entity can hear.
-        source:      (row, col) of the tile where the sound originated.
+             X
+            XEX
+             X
+        """
+        tiles = set(get_sound_radius_tiles((5, 5), 1))
+        expected = {(4, 5), (6, 5), (5, 4), (5, 6)}
+        assert tiles == expected
 
-    Returns:
-        True if the source tile is within hearing range, False otherwise.
-    """
-    sr, sc = source
-    lr, lc = listener
+    def test_range2_shape(self):
+        """
+        Range=2, entity at (5,5).
+        Full 5x5 square minus 4 corners minus origin.
 
-    # Source must be in bounds
-    if not grid.in_bounds(sr, sc):
-        return False
+             XXX
+            XXXXX
+            XXEXX
+            XXXXX
+             XXX
+        """
+        tiles = set(get_sound_radius_tiles((5, 5), 2))
 
-    dr = sr - lr
-    dc = sc - lc
+        # Corners should be excluded
+        assert (3, 3) not in tiles  # top-left corner
+        assert (3, 7) not in tiles  # top-right corner
+        assert (7, 3) not in tiles  # bottom-left corner
+        assert (7, 7) not in tiles  # bottom-right corner
 
-    # Exclude origin tile
-    if dr == 0 and dc == 0:
-        return False
+        # Origin excluded
+        assert (5, 5) not in tiles
 
-    # Exclude the 4 outer corners
-    if abs(dr) == sound_range and abs(dc) == sound_range:
-        return False
+        # Cardinal extremes included
+        assert (3, 5) in tiles  # top center
+        assert (7, 5) in tiles  # bottom center
+        assert (5, 3) in tiles  # left center
+        assert (5, 7) in tiles  # right center
 
-    # Within the bounding square
-    return abs(dr) <= sound_range and abs(dc) <= sound_range
+        # Middle ring included
+        assert (4, 3) in tiles
+        assert (4, 7) in tiles
+        assert (6, 3) in tiles
+        assert (6, 7) in tiles
+
+    def test_range2_tile_count(self):
+        """
+        Range=2: 5x5=25 minus 4 corners minus 1 origin = 20 tiles.
+        """
+        tiles = get_sound_radius_tiles((5, 5), 2)
+        assert len(tiles) == 20
+
+    def test_range3_tile_count(self):
+        """
+        Range=3: 7x7=49 minus 4 corners minus 1 origin = 44 tiles.
+        """
+        tiles = get_sound_radius_tiles((5, 5), 3)
+        assert len(tiles) == 44
+
+    def test_range1_tile_count(self):
+        """
+        Range=1: 3x3=9 minus 4 corners minus 1 origin = 4 tiles.
+        """
+        tiles = get_sound_radius_tiles((5, 5), 1)
+        assert len(tiles) == 4
+
+    def test_origin_never_included(self):
+        for r in range(1, 5):
+            tiles = get_sound_radius_tiles((5, 5), r)
+            assert (5, 5) not in tiles
+
+    def test_corners_never_included(self):
+        origin = (5, 5)
+        for sound_range in range(1, 5):
+            tiles = set(get_sound_radius_tiles(origin, sound_range))
+            corners = [
+                (5 - sound_range, 5 - sound_range),
+                (5 - sound_range, 5 + sound_range),
+                (5 + sound_range, 5 - sound_range),
+                (5 + sound_range, 5 + sound_range),
+            ]
+            for corner in corners:
+                assert corner not in tiles, \
+                    f"Corner {corner} should be clipped at range={sound_range}"
+
+    def test_radius_grows_with_range(self):
+        r1 = get_sound_radius_tiles((5, 5), 1)
+        r2 = get_sound_radius_tiles((5, 5), 2)
+        r3 = get_sound_radius_tiles((5, 5), 3)
+        assert len(r1) < len(r2) < len(r3)
 
 
-def check_sound_event(
-    grid: Grid,
-    listener: tuple[int, int],
-    sound_range: int,
-    source: tuple[int, int],
-) -> tuple[bool, tuple[int, int] | None]:
-    """
-    Process a sound event and return whether the listener heard it.
+# ---------------------------------------------------------------------------
+# can_hear tests
+# ---------------------------------------------------------------------------
 
-    If the listener can hear the sound, returns the source tile as the
-    investigation target. The target is always the tile coordinate where
-    the sound occurred — not the entity that caused it.
+class TestCanHear:
+    def test_adjacent_tile_audible(self):
+        grid = open_grid()
+        assert can_hear(grid, (5, 5), 2, (5, 6)) is True
 
-    Args:
-        grid:        The Grid (used for bounds checking).
-        listener:    (row, col) of the listening entity.
-        sound_range: Maximum tile distance the entity can hear.
-        source:      (row, col) of the tile where the sound originated.
+    def test_origin_tile_not_audible(self):
+        """Entity cannot hear sounds on its own tile."""
+        grid = open_grid()
+        assert can_hear(grid, (5, 5), 2, (5, 5)) is False
 
-    Returns:
-        (heard, target) where:
-            heard  — True if the listener detected the sound
-            target — (row, col) of the source tile if heard, else None
-    """
-    if can_hear(grid, listener, sound_range, source):
-        return True, source
-    return False, None
+    def test_corner_tile_not_audible(self):
+        """Clipped corners are outside hearing range."""
+        grid = open_grid()
+        assert can_hear(grid, (5, 5), 2, (3, 3)) is False
+        assert can_hear(grid, (5, 5), 2, (3, 7)) is False
+        assert can_hear(grid, (5, 5), 2, (7, 3)) is False
+        assert can_hear(grid, (5, 5), 2, (7, 7)) is False
+
+    def test_tile_beyond_range_not_audible(self):
+        grid = open_grid()
+        assert can_hear(grid, (5, 5), 2, (5, 10)) is False
+
+    def test_wall_does_not_block_sound(self):
+        """Walls should NOT block sound propagation."""
+        layout = [
+            [G, G, G, G, G, G, G, G],
+            [G, G, G, G, G, G, G, G],
+            [G, G, G, G, G, G, G, G],
+            [G, G, G, W, W, W, G, G],
+            [G, G, G, W, G, W, G, G],
+            [G, G, G, W, G, W, G, G],
+            [G, G, G, G, G, G, G, G],
+            [G, G, G, G, G, G, G, G],
+        ]
+        grid = Grid.from_layout(layout)
+        # Listener inside a walled room, source outside — still audible
+        assert can_hear(grid, (4, 4), 3, (1, 4)) is True
+
+    def test_noisy_tile_audible_within_range(self):
+        layout = [[G] * 10 for _ in range(10)]
+        layout[3][5] = N
+        grid = Grid.from_layout(layout)
+        assert can_hear(grid, (5, 5), 3, (3, 5)) is True
+
+    def test_out_of_bounds_source_not_audible(self):
+        grid = open_grid(5, 5)
+        assert can_hear(grid, (2, 2), 3, (-1, 2)) is False
+        assert can_hear(grid, (2, 2), 3, (2, 99)) is False
+
+    def test_all_cardinal_extremes_audible_at_exact_range(self):
+        grid = open_grid()
+        listener = (5, 5)
+        sound_range = 3
+        extremes = [
+            (5 - sound_range, 5),  # north
+            (5 + sound_range, 5),  # south
+            (5, 5 + sound_range),  # east
+            (5, 5 - sound_range),  # west
+        ]
+        for tile in extremes:
+            assert can_hear(grid, listener, sound_range, tile) is True
+
+    def test_one_beyond_range_not_audible(self):
+        grid = open_grid()
+        assert can_hear(grid, (5, 5), 2, (5, 8)) is False
+
+
+# ---------------------------------------------------------------------------
+# check_sound_event tests
+# ---------------------------------------------------------------------------
+
+class TestCheckSoundEvent:
+    def test_heard_returns_true_and_source_tile(self):
+        grid = open_grid()
+        heard, target = check_sound_event(grid, (5, 5), 2, (5, 6))
+        assert heard is True
+        assert target == (5, 6)
+
+    def test_not_heard_returns_false_and_none(self):
+        grid = open_grid()
+        heard, target = check_sound_event(grid, (5, 5), 2, (5, 10))
+        assert heard is False
+        assert target is None
+
+    def test_target_is_source_tile_not_entity(self):
+        """The investigation target is the tile, not adjusted in any way."""
+        grid = open_grid()
+        source = (4, 7)
+        heard, target = check_sound_event(grid, (5, 5), 3, source)
+        assert heard is True
+        assert target == source
+
+    def test_own_tile_sound_not_heard(self):
+        """Entity stepping on its own noisy tile should not trigger alert."""
+        grid = open_grid()
+        heard, target = check_sound_event(grid, (5, 5), 2, (5, 5))
+        assert heard is False
+        assert target is None
+
+    def test_corner_sound_not_heard(self):
+        grid = open_grid()
+        heard, target = check_sound_event(grid, (5, 5), 2, (3, 3))
+        assert heard is False
+        assert target is None
